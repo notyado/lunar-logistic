@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d0e" />
+  <meta name="description" content="Lunar Logistics — симулятор лунной логистики" />
+  <title>Lunar Logistics</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app" v-cloak>
+    <div v-if="loading" class="boot-screen">
+      <div class="boot-mark">LF</div>
+      <div class="boot-copy"><span>ИНИЦИАЛИЗАЦИЯ ДИСПЕТЧЕРСКОЙ</span><i></i></div>
+    </div>
+
+    <template v-else>
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true"><span></span></div>
+          <div>
+            <div class="brand">LUNAR LOGISTICS</div>
+            <div class="brand-sub"><span class="status-dot"></span> УЗЕЛ ЦИОЛКОВСКИЙ · СВЯЗЬ НОМИНАЛЬНАЯ</div>
+          </div>
+        </div>
+
+        <div class="mission-progress" :title="`Цель: ${formatNumber(state.game.goal)} кредитов за ${state.game.maxDays} суток`">
+          <div class="mission-progress__top">
+            <span>ЦЕЛЬ ЭКСПЕДИЦИИ</span>
+            <b>{{ Math.min(100, Math.round(state.game.credits / state.game.goal * 100)) }}%</b>
+          </div>
+          <div class="thin-track"><i :style="{width: Math.min(100, state.game.credits / state.game.goal * 100) + '%'}"></i></div>
+        </div>
+
+        <div class="top-metrics">
+          <div class="top-metric">
+            <span>СУТКИ</span>
+            <strong>{{ pad(state.game.day) }}<small>/{{ pad(state.game.maxDays) }}</small></strong>
+          </div>
+          <div class="top-metric credits">
+            <span>КРЕДИТЫ</span>
+            <strong>{{ formatNumber(state.game.credits) }}<small> CR</small></strong>
+          </div>
+          <div class="top-metric rating">
+            <span>РЕЙТИНГ БАЗЫ</span>
+            <strong>{{ state.game.rating }}<small>/100</small></strong>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <button class="icon-button sound-button" :class="{muted: !audioEnabled}" @click="toggleAudio" :aria-label="audioEnabled ? 'Выключить звук' : 'Включить звук'" :title="audioEnabled ? 'Звук включён' : 'Звук выключен'">
+            <svg v-if="audioEnabled" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h3l4 3V7l-4 3H5Z"/><path d="M16 9c1 1 1 5 0 6M19 7c3 3 3 7 0 10"/></svg>
+            <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h3l4 3V7l-4 3H5Z"/><path d="m16 10 4 4m0-4-4 4"/></svg>
+          </button>
+          <button class="icon-button" @click="rulesOpen = true; playSound('uiClick', .28)" aria-label="Правила игры" title="Правила игры">?</button>
+          <button class="day-button" @click="advanceDay" :disabled="hasActive || state.game.finished">
+            <span>{{ state.game.day >= state.game.maxDays ? 'ЗАВЕРШИТЬ' : 'СЛЕДУЮЩИЕ СУТКИ' }}</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="orders-panel panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">ВХОДЯЩИЙ МАНИФЕСТ</span>
+              <h1>Заказы <small>{{ availableOrders.length }} доступно</small></h1>
+            </div>
+            <span class="panel-index">{{ pad(state.orders.length) }}</span>
+          </div>
+
+          <div class="filter-row">
+            <button :class="{active: orderFilter === 'active'}" @click="orderFilter = 'active'">АКТИВНЫЕ</button>
+            <button :class="{active: orderFilter === 'all'}" @click="orderFilter = 'all'">ВСЕ</button>
+          </div>
+
+          <div class="orders-list">
+            <button
+              v-for="order in filteredOrders"
+              :key="order.id"
+              class="order-card"
+              :class="[order.status, {selected: selectedOrderId === order.id}]"
+              @click="selectOrder(order.id)"
+            >
+              <div class="order-thumb"><img :src="order.containerImage" alt="" /></div>
+              <div class="order-main">
+                <div class="order-topline">
+                  <span>{{ order.code }}</span>
+                  <span class="deadline" :class="urgencyClass(order)">{{ deadlineText(order) }}</span>
+                </div>
+                <strong>{{ order.title }}</strong>
+                <span class="order-category">{{ order.category }}</span>
+                <div class="order-stats">
+                  <span><b>{{ order.weight }}</b> кг</span>
+                  <span><b>{{ formatNumber(order.reward) }}</b> CR</span>
+                  <span :class="riskClass(order.risk)"><b>{{ order.risk }}</b>% риск</span>
+                </div>
+              </div>
+              <span class="selection-tick" aria-hidden="true"></span>
+            </button>
+            <div v-if="filteredOrders.length === 0" class="empty-list">Активных заказов нет.</div>
+          </div>
+
+          <div class="telemetry">
+            <div class="telemetry-head"><span>ЖУРНАЛ СОБЫТИЙ</span><i>LIVE</i></div>
+            <div v-for="event in state.events.slice(0, 3)" :key="event.id" class="event-row" :class="event.kind">
+              <span class="event-symbol"></span>
+              <p>{{ event.message }}</p>
+            </div>
+          </div>
+        </aside>
+
+        <main class="map-shell">
+          <div class="map-header">
+            <div>
+              <span class="map-kicker">СЕКТОР L-04 / СЕТКА 31.2°S</span>
+              <strong>ТАКТИЧЕСКАЯ КАРТА</strong>
+            </div>
+            <div class="map-instruction">
+              <svg viewBox="0 0 24 24"><path d="M9 11V6a2 2 0 0 1 4 0v4-2a2 2 0 0 1 4 0v4-1a2 2 0 0 1 4 0v4c0 4-3 7-7 7h-1c-2 0-3-1-4-3l-3-5a2 2 0 0 1 3-3Z"/></svg>
+              ПЕРЕТАСКИВАНИЕ · КОЛЕСО ДЛЯ МАСШТАБА
+            </div>
+          </div>
+
+          <div
+            ref="mapViewport"
+            class="map-viewport"
+            :class="{dragging: map.dragging}"
+            @wheel.prevent="onWheel"
+            @pointerdown="onPointerDown"
+            @pointermove="onPointerMove"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerUp"
+          >
+            <div ref="mapStage" class="map-stage" :style="stageStyle">
+              <img class="moon-surface" src="/assets/moon-surface.webp" alt="Поверхность Луны" draggable="false" />
+              <div class="map-vignette"></div>
+
+              <svg class="terrain-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <pattern id="majorGrid" width="10" height="10" patternUnits="userSpaceOnUse">
+                    <path d="M10 0H0V10" fill="none" stroke="rgba(255,255,255,.10)" stroke-width=".07"/>
+                  </pattern>
+                </defs>
+                <rect width="100" height="100" fill="url(#majorGrid)"/>
+                <path class="zone zone-low" d="M42 29L70 22 79 39 66 59 43 55 34 41Z"/>
+                <path class="zone zone-medium" d="M4 8L37 6 45 29 33 48 8 42Z"/>
+                <path class="zone zone-high" d="M58 56L96 49 98 92 62 98 45 76Z"/>
+                <path class="zone zone-stable" d="M18 58L50 53 57 90 18 97 6 78Z"/>
+              </svg>
+
+              <div class="zone-label" style="left:56%;top:27%"><span>M-01</span> МОРЕ СПОКОЙСТВИЯ</div>
+              <div class="zone-label" style="left:13%;top:20%"><span>C-12</span> КРАТЕРНЫЙ ПОЯС</div>
+              <div class="zone-label" style="left:70%;top:65%"><span>H-07</span> ВОЗВЫШЕННОСТИ</div>
+              <div class="zone-label" style="left:22%;top:71%"><span>T-03</span> БАССЕЙН ТИХО</div>
+
+              <svg class="route-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <path v-if="selectedOrder" :d="routePath(selectedOrder)" class="route route-preview" pathLength="1" />
+                <template v-for="delivery in activeDeliveries" :key="delivery.id">
+                  <path :d="deliveryPath(delivery)" class="route route-active-shadow" />
+                  <path :d="deliveryPath(delivery)" class="route route-active" pathLength="1" />
+                </template>
+              </svg>
+
+              <button class="base-marker" :style="positionStyle(state.game.baseX, state.game.baseY)" @pointerdown.stop @click.stop="focusBase" title="База Циолковский">
+                <span class="base-core"><i></i></span>
+                <span class="marker-caption"><b>БАЗА</b> ЦИОЛКОВСКИЙ</span>
+              </button>
+
+              <button
+                v-for="order in state.orders"
+                :key="order.id"
+                class="order-marker"
+                :class="[order.status, riskClass(order.risk), {selected: selectedOrderId === order.id}]"
+                :style="positionStyle(order.x, order.y)"
+                @pointerdown.stop
+                @click.stop="selectOrder(order.id)"
+                :title="order.title"
+              >
+                <span class="order-marker__ring"><i></i></span>
+                <span class="order-marker__label">
+                  <small>{{ order.code }}</small><b>{{ order.weight }} КГ</b>
+                </span>
+              </button>
+
+              <div
+                v-for="(rover, index) in state.rovers"
+                :key="rover.id"
+                class="rover-marker"
+                :class="[{active: rover.status === 'enroute', selected: selectedRoverId === rover.id}, rover.slug]"
+                :style="roverPositionStyle(rover, index)"
+              >
+                <div class="rover-marker__image"><img :src="rover.image" alt="" /></div>
+                <span>{{ rover.name }}</span>
+              </div>
+            </div>
+
+            <div class="map-status-strip">
+              <div class="coordinate-readout"><span>LAT</span> 31° 12′ S <i></i> <span>LON</span> 116° 08′ E</div>
+              <div class="legend">
+                <span><i class="low"></i> НИЗКИЙ</span>
+                <span><i class="med"></i> СРЕДНИЙ</span>
+                <span><i class="high"></i> ВЫСОКИЙ РИСК</span>
+              </div>
+            </div>
+
+            <div class="zoom-controls">
+              <button @click.stop="zoomBy(1.22)" aria-label="Приблизить">+</button>
+              <span>{{ Math.round(map.scale / map.minScale * 100) }}%</span>
+              <button @click.stop="zoomBy(0.82)" aria-label="Отдалить">−</button>
+              <button class="recenter" @click.stop="resetMap" aria-label="Центрировать карту">
+                <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2v3M10 15v3M2 10h3M15 10h3"/></svg>
+              </button>
+            </div>
+
+            <div v-if="activeDeliveries.length" class="active-mission-banner">
+              <span class="active-mission-icon"><i></i></span>
+              <div>
+                <small>ДОСТАВКА ВЫПОЛНЯЕТСЯ</small>
+                <strong>{{ activeDeliveries[0].roverName }} → {{ activeDeliveries[0].orderTitle }}</strong>
+              </div>
+              <div class="mission-eta"><b>{{ activeCountdown(activeDeliveries[0]) }}</b><span>ДО ВОЗВРАТА</span></div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="dispatch-panel panel">
+          <div class="panel-heading dispatch-heading">
+            <div>
+              <span class="eyebrow">КОНТУР ДОСТАВКИ</span>
+              <h2>Планировщик</h2>
+            </div>
+            <span class="planner-step">{{ selectedOrder ? (selectedRover ? '03' : '02') : '01' }} / 03</span>
+          </div>
+
+          <div v-if="!selectedOrder" class="planner-empty">
+            <div class="planner-orbit"><i></i><span>01</span></div>
+            <h3>Выберите заказ</h3>
+            <p>Укажите точку на карте или карточку в манифесте. Система рассчитает маршрут, расход и допустимый ровер.</p>
+            <div class="empty-steps">
+              <span class="done">01 <b>ЗАКАЗ</b></span><i></i><span>02 <b>РОВЕР</b></span><i></i><span>03 <b>ЗАПУСК</b></span>
+            </div>
+          </div>
+
+          <template v-else>
+            <div class="selected-order-summary" :class="selectedOrder.status">
+              <div class="selected-order-image"><img :src="selectedOrder.containerImage" alt="" /></div>
+              <div>
+                <span>{{ selectedOrder.code }} · {{ selectedOrder.category }}</span>
+                <h3>{{ selectedOrder.title }}</h3>
+                <p>{{ selectedOrder.zone }}</p>
+              </div>
+              <button @click="selectedOrderId = null; selectedRoverId = null" aria-label="Снять выбор">×</button>
+            </div>
+
+            <div class="mission-metrics">
+              <div><span>ГРУЗ</span><b>{{ selectedOrder.weight }} <small>кг</small></b></div>
+              <div><span>МАРШРУТ</span><b>{{ selectedOrder.distance }} <small>км</small></b></div>
+              <div><span>ВЫПЛАТА</span><b>{{ formatNumber(expectedReward) }} <small>CR</small></b></div>
+              <div><span>РИСК</span><b :class="riskClass(selectedOrder.risk)">{{ selectedOrder.risk }}<small>%</small></b></div>
+            </div>
+
+            <div v-if="selectedOrder.status !== 'available'" class="closed-order-state" :class="selectedOrder.status">
+              <span>{{ statusLabel(selectedOrder.status) }}</span>
+              <p>{{ closedOrderText(selectedOrder.status) }}</p>
+            </div>
+
+            <template v-else>
+              <div class="section-label">
+                <span>ВЫБЕРИТЕ РОВЕР</span>
+                <small>{{ feasibleRovers.length }} из {{ state.rovers.length }} совместимы</small>
+              </div>
+
+              <div class="rover-list">
+                <button
+                  v-for="rover in state.rovers"
+                  :key="rover.id"
+                  class="rover-card"
+                  :class="[{selected: selectedRoverId === rover.id, incompatible: !feasibility(selectedOrder, rover).ok}, rover.status]"
+                  @click="selectRover(rover.id)"
+                >
+                  <div class="rover-card__image"><img :src="rover.image" alt="" /></div>
+                  <div class="rover-card__main">
+                    <div class="rover-name"><strong>{{ rover.name }}</strong><span>{{ rover.class }}</span></div>
+                    <div class="rover-specs">
+                      <span>{{ rover.capacity }} КГ</span><span>{{ rover.status === 'idle' ? 'СВОБОДЕН' : 'В РЕЙСЕ' }}</span>
+                    </div>
+                    <div class="battery-line"><i :style="{width: rover.battery + '%'}" :class="batteryClass(rover.battery)"></i></div>
+                  </div>
+                  <div class="rover-battery"><b>{{ Math.round(rover.battery) }}</b><span>%</span></div>
+                  <span class="rover-check"></span>
+                  <div class="incompatibility">{{ feasibility(selectedOrder, rover).reason }}</div>
+                </button>
+              </div>
+
+              <div v-if="selectedRover" class="route-verdict" :class="{ready: selectedFeasibility.ok, blocked: !selectedFeasibility.ok}">
+                <div class="verdict-icon">
+                  <svg v-if="selectedFeasibility.ok" viewBox="0 0 24 24"><path d="m5 12 4 4L19 7"/></svg>
+                  <svg v-else viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+                </div>
+                <div>
+                  <span>{{ selectedFeasibility.ok ? 'МАРШРУТ ДОПУСТИМ' : 'ЗАПУСК ЗАБЛОКИРОВАН' }}</span>
+                  <strong>{{ selectedFeasibility.ok ? `Расход ${selectedFeasibility.cost}% · ${selectedFeasibility.duration} сек.` : selectedFeasibility.reason }}</strong>
+                </div>
+                <div v-if="selectedFeasibility.ok" class="charge-after"><span>ОСТАТОК</span><b>{{ Math.max(0, Math.round(selectedRover.battery - selectedFeasibility.cost)) }}%</b></div>
+              </div>
+
+              <button class="launch-button" :disabled="!selectedRover || !selectedFeasibility.ok || dispatching" @click="dispatch">
+                <span class="launch-button__icon">
+                  <svg viewBox="0 0 24 24"><path d="M5 17 18 4M9 4h9v9M5 7v10h10"/></svg>
+                </span>
+                <span><small>{{ dispatching ? 'ПОДТВЕРЖДЕНИЕ КАНАЛА' : 'ПОДТВЕРДИТЬ МАРШРУТ' }}</small><b>{{ dispatching ? 'ЗАПУСК…' : 'ЗАПУСТИТЬ ДОСТАВКУ' }}</b></span>
+                <i></i>
+              </button>
+              <p class="risk-note">Риск — вероятность потери выплаты и снижения рейтинга. Заряд расходуется при любом исходе.</p>
+            </template>
+          </template>
+        </aside>
+      </div>
+
+      <transition name="toast">
+        <div v-if="toast.show" class="toast" :class="toast.type">
+          <span class="toast-icon">{{ toast.type === 'error' ? '!' : '✓' }}</span>
+          <div><small>{{ toast.type === 'error' ? 'ОПЕРАЦИЯ ОТКЛОНЕНА' : 'СИСТЕМА' }}</small><b>{{ toast.message }}</b></div>
+        </div>
+      </transition>
+
+      <transition name="modal">
+        <div v-if="rulesOpen" class="modal-backdrop" @click.self="rulesOpen = false">
+          <section class="rules-modal">
+            <button class="modal-close" @click="rulesOpen = false">×</button>
+            <span class="eyebrow">ПРОТОКОЛ ДИСПЕТЧЕРА</span>
+            <h2>Пять суток на Луне</h2>
+            <p class="rules-lead">Заработайте <b>{{ formatNumber(state.game.goal) }} CR</b> до закрытия экспедиционного окна и сохраните рейтинг базы.</p>
+            <div class="rules-grid">
+              <div><span>01</span><h3>Выберите груз</h3><p>У заказа есть масса, дедлайн, награда и риск конкретной зоны.</p></div>
+              <div><span>02</span><h3>Сверьте ровер</h3><p>Масса не может превышать грузоподъёмность. Маршруту нужен достаточный заряд.</p></div>
+              <div><span>03</span><h3>Оцените риск</h3><p>Тяжёлый груз и сложный рельеф повышают расход и время. При провале заряд не возвращается.</p></div>
+              <div><span>04</span><h3>Планируйте сутки</h3><p>Новые сутки дают +28% заряда, но просроченные заказы снижают рейтинг.</p></div>
+            </div>
+            <div class="rules-warning"><i></i><p><b>POLAR-99 — контрольный невозможный заказ.</b> Его масса 310 кг выше грузоподъёмности любого ровера. Не тратьте на него время.</p></div>
+            <button class="modal-primary" @click="rulesOpen = false">ПРОТОКОЛ ПРИНЯТ</button>
+          </section>
+        </div>
+      </transition>
+
+      <transition name="modal">
+        <div v-if="state.game.finished" class="modal-backdrop result-backdrop">
+          <section class="result-modal">
+            <span class="eyebrow">ЭКСПЕДИЦИЯ ЗАВЕРШЕНА</span>
+            <div class="result-seal" :class="{success: state.game.credits >= state.game.goal}">
+              <span>{{ state.game.credits >= state.game.goal ? 'A' : 'C' }}</span>
+            </div>
+            <h2>{{ state.game.credits >= state.game.goal ? 'Логистическая цель достигнута' : 'Цель не достигнута' }}</h2>
+            <p>{{ state.game.credits >= state.game.goal ? 'База сохранила темп снабжения и завершила окно с положительным балансом.' : 'Экспедиция завершена, но план по кредитам остался невыполненным.' }}</p>
+            <div class="result-stats">
+              <div><span>КРЕДИТЫ</span><b>{{ formatNumber(state.game.credits) }}</b></div>
+              <div><span>СЧЁТ</span><b>{{ formatNumber(state.game.score) }}</b></div>
+              <div><span>РЕЙТИНГ</span><b>{{ state.game.rating }}</b></div>
+            </div>
+            <button class="modal-primary" @click="resetGame">НАЧАТЬ НОВУЮ ЭКСПЕДИЦИЮ</button>
+          </section>
+        </div>
+      </transition>
+    </template>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+/lunar-logistics
+*.exe
+
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+vendor/
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+*.swp
+*.swo
